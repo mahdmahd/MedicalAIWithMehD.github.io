@@ -6,8 +6,18 @@
     <description>Recent content on مهدی خادم</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>en-us</language>
-    <lastBuildDate>Sat, 12 Aug 2023 14:02:37 +0200</lastBuildDate>
+    <lastBuildDate>Tue, 23 Jan 2024 00:00:00 +0000</lastBuildDate>
     <atom:link href="/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>اپروچ به سرفه</title>
+      <link>/posts/cough/</link>
+      <pubDate>Tue, 23 Jan 2024 00:00:00 +0000</pubDate>
+      <guid>/posts/cough/</guid>
+      <description>خب حالا میخوایم در مورد سرفه صحبت کنیم
+body { background: red; } Text Text Text my link
+example blockquote
+Text 🔗 </description>
+    </item>
     <item>
       <title>شروع</title>
       <link>/posts/my-first-post/</link>
