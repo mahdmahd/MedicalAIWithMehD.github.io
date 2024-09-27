@@ -1,6 +1,6 @@
-#!/bin/sh
+#!/bin/bash
 
-# Set the URLs to download configurations
+# URLs to download configurations
 config_urls=(
     "https://github.com/mahsanet/MahsaFreeConfig/raw/main/mci/sub_3.txt"
     "https://github.com/mahsanet/MahsaFreeConfig/raw/main/mci/sub_1.txt"
@@ -12,320 +12,257 @@ config_urls=(
     "https://github.com/mahsanet/MahsaFreeConfig/raw/main/mtn/sub_4.txt"
 )
 
-# Paths to your helper scripts
-VMESS_SCRIPT="vmess2json.sh"
-VLESS_SCRIPT="vless2json.sh"
-TROJAN_SCRIPT="trojan2json.sh"
-
-# Ensure the helper scripts are executable
-chmod +x "$VMESS_SCRIPT" "$VLESS_SCRIPT" "$TROJAN_SCRIPT"
-
-# Function to encode a file to Base64
-encode_file_base64() {
-    input_file_path="$1"
-    output_file_path="$2"
-
-    if [ ! -f "$input_file_path" ]; then
-        echo "Error: Input file $input_file_path does not exist."
-        return 1
-    fi
-
-    base64 -w 0 "$input_file_path" > "$output_file_path"
-    if [ $? -eq 0 ]; then
-        echo "File $input_file_path encoded to base64 and saved as $output_file_path."
-    else
-        echo "Error encoding file $input_file_path to base64."
-    fi
-}
-
-# Function to download configurations
+# Function to download and return configs
 download_configs() {
     echo "[Step 1] Downloading base64-encoded configurations from URLs..."
-    configs_base64=()  # Initialize an array
+    configs=()
     for url in "${config_urls[@]}"; do
         echo "Downloading from $url..."
-        content=$(curl -s "$url")
+        content=$(curl -s -L "$url")
         if [ $? -eq 0 ] && [ -n "$content" ]; then
-            configs_base64+=("$content")
+            configs+=("$content")
             echo "Downloaded successfully from $url"
         else
             echo "Failed to download from $url"
         fi
     done
-    echo "[Step 1 Complete] Downloaded configurations."
+    echo "[Step 1 Complete] Downloaded ${#configs[@]} configurations."
 }
 
-# Function to decode base64 strings
-decode_configs() {
-    echo "[Step 2] Decoding configurations..."
-    > config.txt  # Clear the file
-    for base64_content in "${configs_base64[@]}"; do
-        base64_content=$(echo "$base64_content" | tr -d '\n\r')  # Remove newlines
-        if [ -n "$base64_content" ]; then
-            decoded_content=$(echo "$base64_content" | base64 -d 2>/dev/null)
-            if [ $? -eq 0 ]; then
-                echo "$decoded_content" >> config.txt
-            else
-                echo "Failed to decode base64 content."
-            fi
+# Function to encode a file to base64
+encode_file_base64() {
+    input_file="$1"
+    output_file="$2"
+    if [ ! -f "$input_file" ]; then
+        echo "Error: $input_file not found."
+        return 1
+    fi
+    base64 "$input_file" > "$output_file"
+    if [ $? -eq 0 ]; then
+        echo "File $input_file encoded to base64 and saved as $output_file."
+    else
+        echo "Error encoding $input_file to base64."
+    fi
+}
+
+# Function to compute hash of the downloaded configs for change detection
+compute_config_hash() {
+    echo -n "$1" | md5sum | awk '{print $1}'
+}
+
+# Function to check for updates in configuration
+check_for_updates() {
+    initial_hash="$1"
+    current_configs=$(cat config.txt)
+    current_hash=$(compute_config_hash "$current_configs")
+    if [ "$initial_hash" != "$current_hash" ]; then
+        echo "Configurations have changed. Restarting process."
+        return 1
+    else
+        echo "No changes in configuration."
+        return 0
+    fi
+}
+
+# Function to parse VLESS URLs
+parse_vless() {
+    local url="$1"
+    echo "Parsing VLESS URL: $url"
+    local id=$(echo "$url" | awk -F'[:@]' '{print $2}')
+    local address=$(echo "$url" | awk -F'[@:]' '{print $3}')
+    local port=$(echo "$url" | awk -F':' '{print $4}')
+    echo "{ \"protocol\": \"vless\", \"id\": \"$id\", \"address\": \"$address\", \"port\": $port }"
+}
+
+# Function to parse VMess URLs
+parse_vmess() {
+    local url="$1"
+    echo "Parsing VMess URL: $url"
+    local vmess_data=$(echo "$url" | sed 's/vmess:\/\///')
+    local decoded=$(echo "$vmess_data" | base64 -d 2>/dev/null)
+    echo "$decoded"
+}
+
+# Function to parse Trojan URLs
+parse_trojan() {
+    local url="$1"
+    echo "Parsing Trojan URL: $url"
+    local password=$(echo "$url" | awk -F'[:@]' '{print $2}')
+    local address=$(echo "$url" | awk -F'[@:]' '{print $3}')
+    local port=$(echo "$url" | awk -F':' '{print $4}')
+    echo "{ \"protocol\": \"trojan\", \"password\": \"$password\", \"address\": \"$address\", \"port\": $port }"
+}
+
+# Function to generate outbound rules for Xray
+generate_outbound() {
+    local protocol="$1"
+    local config="$2"
+    local tag="$3"
+    echo "Generating outbound rule for $protocol with tag: $tag"
+    case $protocol in
+        "vless"|"trojan"|"vmess")
+            echo "$config" | jq --arg tag "$tag" --argjson conf "$config" '
+            {
+                tag: $tag,
+                protocol: .protocol,
+                settings: {
+                    vnext: [{
+                        address: .address,
+                        port: .port,
+                        users: [{
+                            id: .id
+                        }]
+                    }]
+                }
+            }'
+            ;;
+        *)
+            echo "Unsupported protocol: $protocol"
+            ;;
+    esac
+}
+
+# Function to merge configurations and save them into config.txt
+merge_and_save_configs() {
+    echo "[Step 2] Merging and saving decoded configurations into config.txt..."
+    > config.txt
+    for config in "${configs[@]}"; do
+        decoded=$(echo "$config" | base64 -d 2>/dev/null)
+        if [ -n "$decoded" ]; then
+            echo "$decoded" >> config.txt
         fi
     done
-    echo "[Step 2 Complete] Decoded configurations saved to config.txt"
+    echo "[Step 2 Complete] Decoded configurations saved to config.txt."
 }
 
-# Function to compute hash of configurations
-compute_config_hash() {
-    md5sum config.txt | awk '{print $1}' > config_hash.txt
-}
-
-# Function to parse URLs and generate Xray config using helper scripts
-generate_xray_config() {
+# Function to generate configSpeedtest.json
+generate_config_speedtest() {
     echo "[Step 3] Generating configSpeedtest.json..."
-    # Initialize variables
-    proxy_index=10100
     inbounds=""
     outbounds=""
     routing_rules=""
-    proxy_list=()
-    declare -A proxy_url_mapping  # Associative array for port-to-URL mapping
+    proxy_index=10100
 
-    # Read config.txt line by line
     while read -r line; do
-        line=$(echo "$line" | tr -d '\r')
-        if [ -z "$line" ]; then
-            continue
-        fi
-
         protocol=""
         config_json=""
 
         if echo "$line" | grep -q "^vless://"; then
             protocol="vless"
-            # Use vless2json.sh script
-            config_json=$(bash "$VLESS_SCRIPT" --socks5-proxy "$proxy_index" --json "$line")
+            config_json=$(parse_vless "$line")
         elif echo "$line" | grep -q "^vmess://"; then
             protocol="vmess"
-            # Use vmess2json.sh script
-            config_json=$(bash "$VMESS_SCRIPT" --socks5-proxy "$proxy_index" --json "$line")
+            config_json=$(parse_vmess "$line")
         elif echo "$line" | grep -q "^trojan://"; then
             protocol="trojan"
-            # Use trojan2json.sh script
-            config_json=$(bash "$TROJAN_SCRIPT" --socks5-proxy "$proxy_index" --json "$line")
+            config_json=$(parse_trojan "$line")
         else
             echo "Unsupported protocol in line: $line"
             continue
         fi
 
-        # Check if the script returned a valid JSON
         if [ -n "$config_json" ]; then
-            # Append inbounds, outbounds, and routing rules
-            inbound=$(echo "$config_json" | jq -c '.inbounds[]')
-            outbound=$(echo "$config_json" | jq -c '.outbounds[]')
-            routing_rule=$(echo "$config_json" | jq -c '.routing.rules[]')
-
-            inbounds="$inbounds
-            $inbound,"
-
-            outbounds="$outbounds
-            $outbound,"
-
-            routing_rules="$routing_rules
-            $routing_rule,"
-
-            proxy_list+=("$proxy_index")
-            proxy_url_mapping["$proxy_index"]="$line"
+            outbound=$(generate_outbound "$protocol" "$config_json" "proxy${proxy_index}")
+            outbounds="$outbounds,$outbound"
+            inbounds="$inbounds,{\"port\":$proxy_index,\"listen\":\"127.0.0.1\",\"protocol\":\"socks\"}"
+            routing_rules="$routing_rules,{\"inboundTag\":[\"http${proxy_index}\"],\"outboundTag\":\"proxy${proxy_index}\"}"
             proxy_index=$((proxy_index + 1))
-        else
-            echo "Failed to generate configuration for line: $line"
         fi
     done < config.txt
 
-    # Remove trailing commas
-    inbounds=$(echo "$inbounds" | sed '$s/,$//')
-    outbounds=$(echo "$outbounds" | sed '$s/,$//')
-    routing_rules=$(echo "$routing_rules" | sed '$s/,$//')
+    # Remove leading commas
+    outbounds=$(echo "$outbounds" | sed 's/^,//')
+    inbounds=$(echo "$inbounds" | sed 's/^,//')
+    routing_rules=$(echo "$routing_rules" | sed 's/^,//')
 
-    # Create configSpeedtest.json
+    # Create the final configSpeedtest.json
     cat <<EOF > configSpeedtest.json
 {
-    "log": {"loglevel": "warning"},
-    "inbounds": [$inbounds
+    "log": {
+        "loglevel": "warning"
+    },
+    "inbounds": [
+        $inbounds
     ],
     "outbounds": [
-        {"tag": "direct", "protocol": "freedom", "settings": {}},
-        {"tag": "block", "protocol": "blackhole", "settings": {"response": {"type": "http"}}}$outbounds
+        { "protocol": "freedom", "tag": "direct", "settings": {} },
+        { "protocol": "blackhole", "tag": "block", "settings": { "response": { "type": "http" } } }
+        $outbounds
     ],
     "routing": {
-        "domainStrategy": "AsIs",
-        "rules": [$routing_rules
+        "rules": [
+            $routing_rules
         ]
     }
 }
 EOF
 
-    echo "[Step 3 Complete] configSpeedtest.json generated successfully."
+    echo "[Step 3 Complete] configSpeedtest.json generated."
 }
 
-# Function to run Xray using ./xray_softfloat
+# Function to run Xray
 run_xray() {
-    echo "[Step 4] Starting Xray..."
-    ./xray_softfloat -config configSpeedtest.json >/dev/null 2>&1 &
+    echo "[Step 4] Running Xray..."
+    ./xray -config configSpeedtest.json &
     xray_pid=$!
-    sleep 5  # Wait for Xray to start
     echo "Xray started with PID $xray_pid"
 }
 
 # Function to test proxies
 test_proxies() {
-    timeout_value="$1"
-    output_file="$2"
-    echo "[Testing Proxies] Timeout: $timeout_value seconds"
+    proxy_list=("$@")
     url="https://vimeo.com/946171968"
-    > "$output_file"  # Clear the file
+    response_times=()
+
     for port in "${proxy_list[@]}"; do
-        start_time=$(date +%s.%N)
-        response=$(curl --socks5 127.0.0.1:"$port" -o /dev/null -s -w "%{time_total}" --max-time "$timeout_value" "$url")
+        echo "Testing proxy on port $port..."
+        response_time=$(curl --socks5 127.0.0.1:$port -o /dev/null -s -w "%{time_total}" "$url" --max-time 1)
         if [ $? -eq 0 ]; then
-            end_time=$(date +%s.%N)
-            total_time=$(echo "$end_time - $start_time" | bc)
-            echo "Port $port response time: $response seconds"
-            echo "$port:$response" >> "$output_file"
+            response_times+=("$port:$response_time")
+            echo "Port $port: $response_time seconds"
         else
             echo "Port $port failed."
         fi
     done
-
-    # Sort ports by response time
-    sorted_ports=$(sort -t: -k2 -n "$output_file" | cut -d: -f1)
-    echo "$sorted_ports" > "best_ports.txt"
-    echo "[Testing Complete] Results saved to $output_file"
-}
-
-# Function to perform second-round testing
-test_proxies_second_round() {
-    echo "[Step 6] Performing second-round proxy testing..."
-    # First round with 1-second timeout
-    test_proxies 1 "response_times_first_round.txt"
-    # Read top ports from first round
-    top_ports=($(head -n 10 best_ports.txt))  # Adjust number as needed
-
-    # Update proxy_list to only include top ports
-    proxy_list=("${top_ports[@]}")
-
-    # Second round with 0.5-second timeout
-    test_proxies 0.5 "response_times_second_round.txt"
-
-    # Read sorted ports from second round
-    sorted_ports=($(cat best_ports.txt))
-    echo "[Second-Round Testing Complete]"
-}
-
-# Function to save and encode best proxies to USB storage
-save_and_encode_best_proxies() {
-    echo "[Step 7] Saving and encoding best proxies..."
-
-    # Mount USB storage
-    mkdir -p /mnt/usb
-    mount /dev/sda1 /mnt/usb
-
-    # Save best proxies to best.txt
-    > best.txt
-    for port in "${proxy_list[@]}"; do
-        echo "${proxy_url_mapping[$port]}" >> best.txt
-    done
-
-    # Encode best.txt to base64 and save as best64.txt on USB storage
-    encode_file_base64 best.txt /mnt/usb/best64.txt
-
-    # Unmount USB storage
-    umount /mnt/usb
-
-    echo "Best proxies saved and encoded to /mnt/usb/best64.txt"
-}
-
-# Function to copy configs for top ports
-copy_configs_for_top_ports() {
-    echo "[Step 8] Copying configSpeedtest.json to configX.json for top ports..."
-    top_ports=($(head -n 3 best_ports.txt))  # Limit to top 3 ports
-    i=1
-    for port in "${top_ports[@]}"; do
-        config_filename="config${i}.json"
-        echo "Copying configSpeedtest.json to $config_filename..."
-        cp configSpeedtest.json "$config_filename"
-        echo "Copied to $config_filename."
-        i=$((i + 1))
-    done
-}
-
-# Function to check for configuration updates
-check_for_updates() {
-    echo "Checking for configuration updates..."
-    compute_config_hash
-    new_hash=$(cat config_hash.txt)
-    if [ "$new_hash" != "$initial_hash" ]; then
-        echo "Configurations have changed."
-        kill "$xray_pid"
-        initial_hash="$new_hash"
-        return 1  # Signal to restart the process
-    else
-        echo "No configuration changes detected."
-        return 0
-    fi
-}
-
-# Main function to test proxies every 5 minutes
-test_proxies_every_5_minutes() {
-    while true; do
-        echo "Running proxy tests..."
-        # First and second-round tests
-        test_proxies_second_round
-
-        # Save and encode best proxies
-        save_and_encode_best_proxies
-
-        # Copy configs for top ports
-        copy_configs_for_top_ports
-
-        # Check if it's time to re-download configurations
-        current_minute=$(date '+%M')
-        if [ "$current_minute" -ge 40 ]; then
-            echo "Checking for configuration updates..."
-            download_configs
-            decode_configs
-            compute_config_hash
-            new_hash=$(cat config_hash.txt)
-            if [ "$new_hash" != "$initial_hash" ]; then
-                echo "Configurations have been updated. Restarting..."
-                kill "$xray_pid"
-                initial_hash="$new_hash"
-                return 1  # Signal to restart the script
-            fi
-        fi
-
-        # Sleep for 5 minutes before the next round
-        sleep 300
-    done
+    echo "${response_times[@]}"
 }
 
 # Main execution
 main() {
-    initial_hash=""
-    while true; do
-        download_configs
-        decode_configs
-        compute_config_hash
-        initial_hash=$(cat config_hash.txt)
-        generate_xray_config
-        run_xray
+    # Step 1: Download configurations
+    download_configs
 
-        # Test proxies and manage configurations
-        test_proxies_every_5_minutes
+    # Step 2: Merge and save configurations
+    merge_and_save_configs
+
+    # Step 3: Generate configSpeedtest.json
+    generate_config_speedtest
+
+    # Step 4: Run Xray
+    run_xray
+
+    # Wait for Xray to start
+    sleep 5
+
+    # Add further steps like proxy testing or monitoring if needed
+}
+
+# Main loop to check for updates every 5 minutes
+run_in_loop() {
+    initial_config=$(cat config.txt)
+    initial_hash=$(compute_config_hash "$initial_config")
+
+    while true; do
+        # Test proxies and do other actions...
+        check_for_updates "$initial_hash"
         if [ $? -eq 1 ]; then
-            continue  # Restart the loop if configurations have changed
+            # Re-download configs and regenerate if there are changes
+            main
         fi
+        sleep 300  # Wait for 5 minutes before the next check
     done
 }
 
 # Start the script
-echo "Proxy Manager Script Starting..."
 main
+run_in_loop
